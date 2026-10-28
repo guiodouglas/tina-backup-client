@@ -3,7 +3,8 @@
 #
 # Uso (como root, a partir da pasta do pacote):
 #   scripts/instalar.sh [--agendamento "M H * * DIAS"] [--senha-banco-stdin]
-#   scripts/instalar.sh --atualizar   (troca só o código; mantém .env, listas, logs, fila e o horário do backup)
+#   scripts/instalar.sh --atualizar   (troca só o código; mantém .env, listas, logs, fila e o horário do backup;
+#                                      acrescenta ao .env só as chaves novas que faltarem)
 # Nos dois casos garante a linha do monitor contínuo no crontab (a cada 5 minutos).
 #
 # Se já existir uma instalação: guarda cópia em /root, aproveita só os valores
@@ -34,6 +35,15 @@ garantir_monitor_no_crontab() {
   fi
   echo "crontab: $(grep -E "^[^#].*$DESTINO/scripts/monitor\.sh" /etc/crontab)"
 }
+# Retenção no FTP (2.2.0): instalações anteriores não têm a chave; entra com o padrão.
+RETENCAO_PADRAO=3
+garantir_retencao_no_env() {
+  if ! grep -q '^FTP_BACKUP_RETENCAO=' "$DESTINO/.env"; then
+    printf '\n# Backups do servidor mantidos no FTP (mínimo 2); ver .env.example\nFTP_BACKUP_RETENCAO=%s\n' \
+      "$RETENCAO_PADRAO" >> "$DESTINO/.env"
+  fi
+  echo ".env: $(grep '^FTP_BACKUP_RETENCAO=' "$DESTINO/.env")"
+}
 [ "$PACOTE" != "$DESTINO" ] || { echo "Rode a partir da pasta do pacote, não de $DESTINO" >&2; exit 1; }
 
 if [ "$ATUALIZAR" = sim ]; then
@@ -45,6 +55,7 @@ if [ "$ATUALIZAR" = sim ]; then
   rm -f "$DESTINO/scripts/instalar.sh"
   chmod 755 "$DESTINO/scripts/"*.sh
   garantir_monitor_no_crontab
+  garantir_retencao_no_env
   echo "atualizado: backup-client $ANTES -> $(cat "$DESTINO/VERSION") (.env, listas, logs, fila e crontab mantidos)"
   exit 0
 fi
@@ -59,7 +70,7 @@ TMP="$(mktemp -d)"; chmod 700 "$TMP"
 trap 'rm -rf "$TMP"' EXIT
 
 # Valores do .env antigo que continuam valendo (linhas copiadas como estão).
-MANTIDAS='^(SERVER_NAME|TZ|RCLONE_REMOTE|RCLONE_TEAM_DRIVE_(SEGUNDA|TERCA|QUARTA|QUINTA|SEXTA)|RCLONE_CONFIG_GDRIVE_[A-Z_]+|FTP_BACKUP_(HOST|PORT|USER|PASSWORD|REMOTE_DIR)|TINA_DB_(HOST|PORT|NAME|SSLMODE)|BACKUP_ARCHIVE_DIR|LOG_RETENTION_DAYS)='
+MANTIDAS='^(SERVER_NAME|TZ|RCLONE_REMOTE|RCLONE_TEAM_DRIVE_(SEGUNDA|TERCA|QUARTA|QUINTA|SEXTA)|RCLONE_CONFIG_GDRIVE_[A-Z_]+|FTP_BACKUP_(HOST|PORT|USER|PASSWORD|REMOTE_DIR|RETENCAO)|TINA_DB_(HOST|PORT|NAME|SSLMODE)|BACKUP_ARCHIVE_DIR|LOG_RETENTION_DAYS)='
 
 if [ -d "$DESTINO" ]; then
   COPIA="/root/backup-client-antigo-$(date +%Y%m%d-%H%M).tar.gz"
@@ -93,6 +104,7 @@ if [ -s "$TMP/env.mantido" ]; then
     cat "$TMP/env.mantido"
     grep -q '^TINA_DB_PORT=' "$TMP/env.mantido" || echo "TINA_DB_PORT=54323"
     grep -q '^TINA_DB_NAME=' "$TMP/env.mantido" || echo "TINA_DB_NAME=tina"
+    grep -q '^FTP_BACKUP_RETENCAO=' "$TMP/env.mantido" || echo "FTP_BACKUP_RETENCAO=$RETENCAO_PADRAO"
     echo "TINA_DB_USER=backup_client"
     echo "TINA_DB_PASSWORD=$SENHA"
   } > "$DESTINO/.env"

@@ -4,7 +4,8 @@
 #
 # Uso: backup.sh [modo] [--slot DIA]
 #   (sem modo)        completo: Drive, TAR, FTP, saúde
-#   --dry-run         simula: Drive em simulação, sem TAR, FTP nem banco; mostra o documento
+#   --dry-run         simula: Drive em simulação, sem TAR, envio nem banco; lista o FTP e
+#                     mostra o que a retenção apagaria; mostra o documento
 #   --only-sync       só o Drive
 #   --only-tar        só cria e valida o TAR (fica guardado para um --only-ftp)
 #   --only-ftp        só envia o TAR deixado pelo --only-tar
@@ -30,7 +31,7 @@ while [ $# -gt 0 ]; do
     --check-config) CHECAR=sim ;;
     --slot) shift; SLOT="${1:-}"; SLOT_FORCADO=true ;;
     --agendado) MANUAL=false ;;
-    -h|--help) sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "Opção desconhecida: $1" >&2; exit 2 ;;
   esac
   shift
@@ -112,6 +113,10 @@ if [ "$SIMULAR" = nao ]; then
   if faz ftp && [ "$TAR_PRONTO" = sim ]; then
     executar_ftp
   fi
+elif faz ftp; then
+  # Simulação: mostra o que a retenção apagaria hoje (só lista o FTP).
+  aplicar_retencao_ftp "$(basename "$(nome_tar)")" sim
+  FTP_JSON="$(jq -cn --argjson r "$RETENCAO_JSON" '{status: "NAO_EXECUTADA"} + (if $r then {retencao: $r} else {} end)')"
 fi
 
 # Saúde, containers, inventário.

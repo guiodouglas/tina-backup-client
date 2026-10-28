@@ -51,6 +51,22 @@ checar_configuracao() {
   else
     falha "FTP: sem acesso a ${FTP_BACKUP_HOST}:${FTP_BACKUP_PORT}${FTP_BACKUP_REMOTE_DIR}"
   fi
+  [[ "${SERVER_NAME:-}" =~ ^[A-Za-z0-9._-]+$ ]] \
+    || falha ".env: SERVER_NAME com caractere fora de letras, números, '.', '-', '_' (a retenção depende do nome)"
+  if retencao_valida; then
+    ok ".env: FTP_BACKUP_RETENCAO=$FTP_BACKUP_RETENCAO"
+  else
+    falha ".env: FTP_BACKUP_RETENCAO ausente ou inválida (número, mínimo $RETENCAO_MINIMA)"
+  fi
+  if testar_permissao_apagar_ftp; then
+    ok "FTP: usuário pode enviar e apagar (marcador de teste removido)"
+  else
+    falha "FTP: não foi possível enviar e apagar o marcador ${SERVER_NAME}_teste-de-permissao.tmp (conferir se ficou no FTP)"
+  fi
+  local lista_ftp
+  if lista_ftp="$(listar_backups_ftp)"; then
+    ok "FTP: $(grep -c . <<<"$lista_ftp") backup(s) do servidor: $(tr '\n' ' ' <<<"$lista_ftp")"
+  fi
 
   if PGPASSWORD="$TINA_DB_PASSWORD" PGCONNECT_TIMEOUT=15 psql -X -q -t -A -c 'SELECT 1' \
        "host=$TINA_DB_HOST port=$TINA_DB_PORT dbname=$TINA_DB_NAME user=$TINA_DB_USER sslmode=$TINA_DB_SSLMODE" >/dev/null 2>&1; then
