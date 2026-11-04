@@ -21,6 +21,15 @@ curl -fsSL https://raw.githubusercontent.com/guiodouglas/tina-backup-client/main
 Em servidor com a versão 2.3.1 ou mais nova, atualizar é só rodar
 `/opt/backup-client/scripts/atualizar.sh`, que também confere com `--check-config` no fim.
 
+No fim da implantação o instalador pede ao banco da TINA o **registro do servidor**: a identidade é a
+impressão digital do SSH. A TINA registra o acesso sozinha em até 1 min e avisa no Chat. Reinstalar o
+mesmo servidor só o reativa; um servidor diferente com o mesmo nome fica como entrada nova (a antiga
+fica inativa, com o histórico).
+
+**Desinstalar:** `/opt/backup-client/scripts/desinstalar.sh` (pede o nome do servidor para confirmar).
+Avisa o banco (o servidor fica inativo no monitoramento) e remove crontab, usuário `tina`, chaves de
+acesso e `/opt/backup-client`. Os backups já enviados ao FTP e aos Drives ficam.
+
 Antes de implantar: Docker instalado e 5 Shared Drives **vazios e só deste servidor**, com a conta
 do backup como membro. O backup é um espelho: um Drive que já tem conteúdo teria tudo apagado, e por
 isso o instalador o recusa.

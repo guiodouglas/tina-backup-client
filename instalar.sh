@@ -14,7 +14,11 @@
 #   6. .env: FTP, nome do servidor, credencial do Drive, 5 Shared Drives e senha do banco (senhas ocultas).
 #   7. Listas do que entra no backup e exclusões.
 #   8. Crontab: monitor a cada 5 min e backup de segunda a sexta no horário escolhido.
-#   9. --check-config e os "Dados para o registro" (mandar ao construtor).
+#   9. Registro: pede ao banco da TINA o registro do servidor (identidade = impressão digital do SSH);
+#      a TINA registra o acesso sozinha em até 1 min e avisa no Chat.
+#  10. --check-config e os "Dados para o registro" (só se o registro automático falhar).
+#
+# Desinstalar: /opt/backup-client/scripts/desinstalar.sh (servidor fica inativo; backups ficam).
 #
 # Servidor já instalado: atualização. Troca só o código; mantém .env, listas, logs, fila e o horário
 # do backup (acrescenta só o que versões novas exigem). Não pergunta nada. Quem já tem a 2.3.1 ou
@@ -72,11 +76,11 @@ instalar_codigo() {
   local novo
   mkdir -p "$DESTINO" || parar "Não consegui criar $DESTINO"
   novo="$(mktemp -d "$DESTINO/.novo.XXXX")" || parar "Não consegui criar pasta temporária em $DESTINO"
-  cp -R "$PACOTE/VERSION" "$PACOTE/scripts" "$PACOTE/lib" "$PACOTE/.env.example" "$novo/" || parar "Falha ao copiar o código"
+  cp -R "$PACOTE/VERSION" "$PACOTE/scripts" "$PACOTE/lib" "$PACOTE/acesso" "$PACOTE/.env.example" "$novo/" || parar "Falha ao copiar o código"
   chmod 755 "$novo/scripts/"*.sh
-  rm -rf -- "$DESTINO/scripts" "$DESTINO/lib" "$DESTINO/kit"   # kit: instalações até a 2.2.0
+  rm -rf -- "$DESTINO/scripts" "$DESTINO/lib" "$DESTINO/acesso" "$DESTINO/kit"   # kit: instalações até a 2.2.0
   rm -f -- "$DESTINO/docker-compose.yml"                       # saiu na 2.0.4 (rclone com docker run)
-  mv -f "$novo/VERSION" "$novo/.env.example" "$DESTINO/" && mv "$novo/scripts" "$novo/lib" "$DESTINO/" \
+  mv -f "$novo/VERSION" "$novo/.env.example" "$DESTINO/" && mv "$novo/scripts" "$novo/lib" "$novo/acesso" "$DESTINO/" \
     || parar "Falha ao trocar o código em $DESTINO"
   rm -rf -- "$novo"
   mkdir -p "$DESTINO/logs" "$DESTINO/tmp" "$DESTINO/fila" && chmod 700 "$DESTINO/tmp" "$DESTINO/fila"
@@ -92,6 +96,24 @@ tem_linha_backup() {
 garantir_monitor() {
   if grep -qE "^[^#].*$DESTINO/scripts/monitor\.sh" /etc/crontab; then ok "monitor a cada 5 min"
   else printf '\n# backup-client (TINA): monitor contínuo\n*/5 * * * * root %s/scripts/monitor.sh\n' "$DESTINO" >> /etc/crontab && feito "monitor a cada 5 min"; fi
+}
+
+# ---------- Registro na TINA ----------
+
+# Pede ao banco o registro do servidor (a TINA registra o acesso sozinha, em até 1 min, e avisa no Chat).
+# A identidade é a impressão digital do SSH: igual reativa, diferente cria um servidor novo. Se falhar,
+# não interrompe: o construtor registra à mão com os "Dados para o registro".
+passo_registro() {
+  local r
+  r="$( (RAIZ="$DESTINO"; . "$DESTINO/lib/comum.sh"; . "$DESTINO/lib/registro.sh"; carregar_env && pedir_registro_ao_banco) 2>&1)" \
+    || { printf 'AVISO  registro automático não concluído (%s): mande os Dados para o registro ao construtor.\n' "$(tail -1 <<<"$r" | cut -c1-200)"; return 0; }
+  case "$r" in
+    novo) feito "pedido de registro enviado: a TINA registra o acesso em até 1 min e avisa no Chat" ;;
+    reativacao) feito "servidor conhecido, reativado: a TINA confirma o acesso em até 1 min e avisa no Chat" ;;
+    troca) feito "outro servidor com este nome: o antigo ficou inativo e um novo foi criado; a TINA registra em até 1 min" ;;
+    ja_registrado|adotado) ok "servidor já registrado na TINA (identidade confirmada)" ;;
+    *) printf 'AVISO  resposta inesperada do registro: %s\n' "$r" ;;
+  esac
 }
 
 # ---------- Atualização ----------
@@ -110,6 +132,7 @@ atualizar() {
     feito "FTP_BACKUP_RETENCAO=$RETENCAO_PADRAO no .env"
   fi
   echo "atualizado: backup-client $antes -> $(cat "$DESTINO/VERSION") (.env, listas, logs, fila e horário do backup mantidos)"
+  passo_registro
 }
 
 # ---------- Perguntas ----------
@@ -438,7 +461,9 @@ implantar() {
     exit 1
   fi
   passo_crontab
-  titulo "9. Conferência"
+  titulo "9. Registro na TINA"
+  passo_registro
+  titulo "10. Conferência"
   if "$DESTINO/scripts/backup.sh" --check-config; then
     echo; echo "Tudo certo. O servidor entra no backup na próxima noite e a primeira coleta é o marco zero."
   else

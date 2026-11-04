@@ -34,6 +34,7 @@ for a in "$@"; do
   case "$a" in
     lsf) ls -Ap "/drives/$id"; exit 0 ;;
     touch) touch "/drives/$id/${!##gdrive:}"; exit 0 ;;
+    deletefile) rm -f "/drives/$id/${!##gdrive:}"; exit 0 ;;
   esac
 done
 exit 0
@@ -43,7 +44,32 @@ docker exec -i "$C" bash -c 'cat > /stubs/systemctl; chmod +x /stubs/systemctl' 
 [ "$1" = is-active ] && echo active
 exit 0
 EOF
-docker exec -i "$C" bash -c 'printf "#!/bin/bash\nexit 0\n" > /stubs/psql; chmod +x /stubs/psql'
+# psql simulado: guarda o documento enviado às funções ingest.* em /tmp/psql-ingest (uma linha por chamada).
+# /tmp/psql-resposta = resposta do pedir_registro (padrão ja_registrado); /tmp/psql-falha = banco fora.
+docker exec -i "$C" bash -c 'cat > /stubs/psql; chmod +x /stubs/psql' <<'EOF'
+#!/bin/bash
+ent=""
+[ -t 0 ] || ent="$(timeout 2 cat)"
+case "$ent" in
+  *"ingest."*)
+    [ -e /tmp/psql-falha ] && { echo "psql: connection refused"; exit 2; }
+    arq="$(grep -o 'cat [^`]*' <<<"$ent" | head -1 | cut -c5- | tr -d '\\')"
+    echo "$(grep -o 'ingest\.[a-z_]*' <<<"$ent" | head -1) $(tr -d '\n' < "$arq")" >> /tmp/psql-ingest
+    case "$ent" in
+      *avisar_desinstalacao*) echo desinstalado ;;
+      *) cat /tmp/psql-resposta 2>/dev/null || echo ja_registrado ;;
+    esac ;;
+esac
+exit 0
+EOF
+docker exec -i "$C" bash -c 'cat > /stubs/ssh-keygen; chmod +x /stubs/ssh-keygen' <<'EOF'
+#!/bin/bash
+echo "256 SHA256:TESTEimpressao123 root@teste (ED25519)"
+EOF
+docker exec -i "$C" bash -c 'cat > /stubs/sshd; chmod +x /stubs/sshd' <<'EOF'
+#!/bin/bash
+echo "port 2281"
+EOF
 docker exec -i "$C" bash -c 'cat > /stubs/curl; chmod +x /stubs/curl' <<'EOF'
 #!/bin/bash
 [ -e /tmp/curl-falha ] && exit 22
@@ -98,7 +124,9 @@ TOTAL=$((TOTAL + 1)); if [ "$RC1" -ne 0 ] && grep -q 'o que já foi respondido f
 confere "interrompido: sem linha de backup no crontab" '! grep -q scripts/backup.sh /etc/crontab'
 confere "interrompido: .env com 600" '[ "$(stat -c %a /opt/backup-client/.env)" = 600 ]'
 
+docker exec "$C" bash -c 'echo novo > /tmp/psql-resposta'
 SAIDA2="$(roda /tmp/respostas2 2>&1)"; RC2=$?
+docker exec "$C" rm -f /tmp/psql-resposta
 echo "$SAIDA2" | tail -14
 confere "dependências instaladas" 'command -v jq && command -v psql && command -v sar && command -v sudo && command -v uuidgen'
 TOTAL=$((TOTAL + 1)); if grep -qE "tok-secreto|senha-banco-456|c\\\$d&e" <<<"$SAIDA1$SAIDA2"; then echo "FALHA  nenhuma senha na saída"; FALHAS=$((FALHAS + 1)); else echo "ok     nenhuma senha na saída"; fi
@@ -122,9 +150,14 @@ confere "Drive de outro servidor intocado" '[ "$(ls -A /drives/MARCADO)" = .back
 confere "crontab: backup no horário" 'grep -qE "^30 21 \* \* 1-5 root /opt/backup-client/scripts/backup.sh --agendado$" /etc/crontab'
 confere "crontab: monitor no formato do --check-config" 'grep -qE "^\*/5 \* \* \* \* root /opt/backup-client/scripts/monitor\.sh$" /etc/crontab'
 confere "listas: padrão + acrescentados" 'grep -qx /opt /opt/backup-client/backup_sources.txt && grep -qx /srv/dados /opt/backup-client/backup_sources.txt && ! grep -q sem-barra /opt/backup-client/backup_sources.txt && grep -qxF "/srv/dados/cache/**" /opt/backup-client/backup_excludes.txt'
-confere "código: só o necessário" '[ -x /opt/backup-client/scripts/backup.sh ] && [ -f /opt/backup-client/lib/comum.sh ] && [ ! -e /opt/backup-client/instalar.sh ] && [ ! -e /opt/backup-client/testes ] && [ ! -e /opt/backup-client/acesso ] && [ -z "$(ls -d /opt/backup-client/.novo.* 2>/dev/null)" ]'
+confere "código: só o necessário" '[ -x /opt/backup-client/scripts/backup.sh ] && [ -f /opt/backup-client/lib/comum.sh ] && [ ! -e /opt/backup-client/instalar.sh ] && [ ! -e /opt/backup-client/testes ] && [ -f /opt/backup-client/acesso/tina.pub ] && [ -z "$(ls -d /opt/backup-client/.novo.* 2>/dev/null)" ]'
 confere "acesso: tina com chave presa ao IP do controle" 'id -nG tina >/dev/null && grep -q "^from=\"177.170.20.101\",no-agent-forwarding,no-port-forwarding,no-X11-forwarding ssh-ed25519 " /opt/tina-agent/.ssh/authorized_keys && [ "$(stat -c %U /opt/tina-agent/.ssh/authorized_keys)" = tina ] && visudo -cf /etc/sudoers.d/tina'
 confere "acesso: root com construtor (preso) e Mac" '[ "$(grep -c ssh-ed25519 /root/.ssh/authorized_keys)" = 2 ] && grep -q "^from=\"177.170.20.101\"" /root/.ssh/authorized_keys'
+
+# --- Registro na TINA: a implantação pede o registro com nome, porta e impressão digital do SSH.
+TOTAL=$((TOTAL + 1)); if grep -q 'pedido de registro enviado' <<<"$SAIDA2"; then echo "ok     implantação: pedido de registro enviado"; else echo "FALHA  implantação: sem pedido de registro"; FALHAS=$((FALHAS + 1)); fi
+confere "registro: documento com nome, porta e impressão do SSH" 'grep "^ingest.pedir_registro " /tmp/psql-ingest | head -1 | cut -d" " -f2- | jq -e ".nome == \"srv-novo\" and .porta == \"2281\" and .impressao == \"SHA256:TESTEimpressao123\""'
+confere "registro: nenhuma senha no documento" '! grep -q senha-banco /tmp/psql-ingest'
 
 # --- Atualização pelo mesmo comando: sem perguntas, nada além do código muda.
 docker exec "$C" bash -c 'mkdir -p /opt/backup-client/logs/2026-11-01 && echo x > /opt/backup-client/logs/2026-11-01/backup.log && echo y > /opt/backup-client/fila/item.json
@@ -135,6 +168,11 @@ atualiza() { docker exec "$C" env PATH="/stubs:/usr/sbin:/usr/bin:/sbin:/bin" EN
 SAIDA3="$(atualiza 2>&1)"; RC3=$?
 TOTAL=$((TOTAL + 1)); if [ "$RC3" -eq 0 ] && grep -q 'atualizado: backup-client .* -> 9.9.9' <<<"$SAIDA3"; then echo "ok     mesmo comando atualiza, sem perguntas"; else echo "FALHA  atualização: rc=$RC3: $SAIDA3"; FALHAS=$((FALHAS + 1)); fi
 confere "atualização: versão nova" '[ "$(cat /opt/backup-client/VERSION)" = 9.9.9 ]'
+confere "atualização: confirma a identidade no banco (servidores antigos adotam a impressão)" '[ "$(grep -c "^ingest.pedir_registro " /tmp/psql-ingest)" = 2 ]'
+docker exec "$C" touch /tmp/psql-falha
+SAIDA3B="$(atualiza 2>&1)"; RC3B=$?
+docker exec "$C" rm -f /tmp/psql-falha
+TOTAL=$((TOTAL + 1)); if [ "$RC3B" -eq 0 ] && grep -q 'registro automático não concluído' <<<"$SAIDA3B"; then echo "ok     banco fora: atualiza e avisa que o registro não foi feito"; else echo "FALHA  banco fora na atualização: rc=$RC3B: $SAIDA3B"; FALHAS=$((FALHAS + 1)); fi
 confere "atualização: .env, listas, logs, fila, crontab e chaves iguais" 'cd /opt/backup-client && sha256sum -c /tmp/antes.sha'
 confere "atualização: resíduos antigos removidos" '[ ! -e /opt/backup-client/kit ] && [ ! -e /opt/backup-client/scripts/preparar-servidor.sh ]'
 
@@ -170,6 +208,32 @@ sleep 1
 atualizar_sh >/dev/null 2>&1; RC7=$?
 TOTAL=$((TOTAL + 1)); if [ "$RC7" -eq 3 ]; then echo "ok     atualizar.sh: backup em andamento devolve o código 3"; else echo "FALHA  atualizar.sh com backup em andamento: rc=$RC7"; FALHAS=$((FALHAS + 1)); fi
 confere "atualizar.sh: backup em andamento, versão não muda" '[ "$(cat /opt/backup-client/VERSION)" = 7.7.7 ]'
+
+# --- desinstalar.sh
+desinstala() { docker exec "$C" env PATH="/stubs:/usr/sbin:/usr/bin:/sbin:/bin" bash -c 'cd /opt/backup-client && scripts/desinstalar.sh "$@"' _ "$@"; }
+confere "desinstalar.sh vem no pacote, executável" '[ -x /opt/backup-client/scripts/desinstalar.sh ]'
+docker exec -d "$C" flock /opt/backup-client/tmp/backup.lock sleep 20
+sleep 1
+desinstala --sim >/dev/null 2>&1; RC8=$?
+TOTAL=$((TOTAL + 1)); if [ "$RC8" -eq 3 ]; then echo "ok     desinstalar: backup em andamento devolve o código 3"; else echo "FALHA  desinstalar com backup em andamento: rc=$RC8"; FALHAS=$((FALHAS + 1)); fi
+confere "desinstalar: backup em andamento, nada muda" '[ -d /opt/backup-client ] && id tina'
+docker exec "$C" pkill -f "^sleep 20"
+docker exec "$C" bash -c 'for i in $(seq 25); do flock -n /opt/backup-client/tmp/backup.lock true && exit 0; sleep 1; done; exit 1'
+docker exec "$C" touch /tmp/psql-falha
+SAIDA9="$(desinstala --sim 2>&1)"; RC9=$?
+TOTAL=$((TOTAL + 1)); if [ "$RC9" -ne 0 ] && grep -q 'Não consegui avisar o banco' <<<"$SAIDA9"; then echo "ok     desinstalar: banco fora não desinstala"; else echo "FALHA  desinstalar com banco fora: rc=$RC9: $SAIDA9"; FALHAS=$((FALHAS + 1)); fi
+confere "desinstalar: banco fora, nada foi removido" '[ -d /opt/backup-client ] && id tina && grep -q "scripts/backup.sh" /etc/crontab && [ -f /etc/sudoers.d/tina ]'
+docker exec "$C" rm -f /tmp/psql-falha
+SAIDA10="$(desinstala --sim 2>&1)"; RC10=$?
+echo "$SAIDA10" | tail -8
+TOTAL=$((TOTAL + 1)); if [ "$RC10" -eq 0 ] && grep -q 'banco avisado: desinstalado' <<<"$SAIDA10"; then echo "ok     desinstalar: avisa o banco e conclui"; else echo "FALHA  desinstalar: rc=$RC10"; FALHAS=$((FALHAS + 1)); fi
+confere "desinstalar: documento com nome e impressão do SSH" 'grep "^ingest.avisar_desinstalacao " /tmp/psql-ingest | tail -1 | cut -d" " -f2- | jq -e ".nome == \"srv-novo\" and .impressao == \"SHA256:TESTEimpressao123\""'
+confere "desinstalar: pasta removida" '[ ! -e /opt/backup-client ]'
+confere "desinstalar: crontab sem backup-client" '! grep -q "backup-client" /etc/crontab'
+confere "desinstalar: usuário tina, sudoers e pasta removidos" '! id tina && [ ! -e /etc/sudoers.d/tina ] && [ ! -e /opt/tina-agent ]'
+confere "desinstalar: chaves do construtor e do Mac removidas" '[ "$(grep -c ssh-ed25519 /root/.ssh/authorized_keys)" = 0 ]'
+confere "desinstalar: marcadores dos Drives removidos" '[ -z "$(find /drives/D1 /drives/D2 /drives/D3 /drives/D4 /drives/D5 -name ".backup-client-reservado-*")" ]'
+confere "desinstalar: Drive com conteúdo de outro intocado" '[ "$(ls -A /drives/OCUPADO)" = home ]'
 
 echo "testes: $TOTAL, falhas: $FALHAS"
 [ "$FALHAS" -eq 0 ]
