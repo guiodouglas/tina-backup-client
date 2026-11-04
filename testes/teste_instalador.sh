@@ -46,7 +46,11 @@ EOF
 docker exec -i "$C" bash -c 'printf "#!/bin/bash\nexit 0\n" > /stubs/psql; chmod +x /stubs/psql'
 docker exec -i "$C" bash -c 'cat > /stubs/curl; chmod +x /stubs/curl' <<'EOF'
 #!/bin/bash
+[ -e /tmp/curl-falha ] && exit 22
 case "$*" in
+  *raw.githubusercontent.com*/instalar.sh*) cat /pacote-novo/instalar.sh; exit 0 ;;
+  *raw.githubusercontent.com*/VERSION*) cat /pacote-novo/VERSION; exit 0 ;;
+  *archive/refs/tags/*) tar -C / -czf - pacote-novo; exit 0 ;;
   *api.ipify*) echo 203.0.113.9; exit 0 ;;
   *ftp://errado*) exit 67 ;;
   *--list-only*) cat /ftp/lista; exit 0 ;;
@@ -62,6 +66,8 @@ roda() {  # arquivo de respostas (no container), argumentos do instalador
 # --- Sem instalação: --atualizar recusa, sem criar nada.
 confere "--atualizar sem instalação para com erro" '! ENTRADA_INSTALADOR=/dev/null bash /pacote/instalar.sh --atualizar'
 confere "--atualizar sem instalação não cria a pasta" '[ ! -e /opt/backup-client ]'
+SAIDA0="$(docker exec "$C" bash /pacote/instalar.sh 2>&1)"; RC0=$?
+TOTAL=$((TOTAL + 1)); if [ "$RC0" -ne 0 ] && grep -q 'rode num terminal' <<<"$SAIDA0" && ! grep -q '/dev/tty' <<<"$SAIDA0"; then echo "ok     sem terminal: só a mensagem clara"; else echo "FALHA  sem terminal: rc=$RC0: $SAIDA0"; FALHAS=$((FALHAS + 1)); fi
 
 # --- Implantação em duas partes: as respostas acabam no meio; a segunda rodada só pergunta o resto.
 SENHA_FTP="a'b c\$d&e"
@@ -146,6 +152,24 @@ atualiza --atualizar >/dev/null 2>&1
 confere "2.2.0: retenção acrescentada" 'grep -qx "FTP_BACKUP_RETENCAO=3" /opt/backup-client/.env'
 confere "2.2.0: monitor acrescentado" 'grep -q "^\*/5 .*monitor.sh$" /etc/crontab'
 confere "versão publicada: VERSION da fonte é X.Y.Z" 'grep -qE "^[0-9]+\.[0-9]+\.[0-9]+$" /pacote/VERSION'
+
+# scripts/atualizar.sh: baixa o instalador e a tag, troca o próprio arquivo e confere com o código novo.
+confere "atualizar.sh vem no pacote, executável" '[ -x /opt/backup-client/scripts/atualizar.sh ]'
+atualizar_sh() { docker exec "$C" env PATH="/stubs:/usr/sbin:/usr/bin:/sbin:/bin" bash -c 'cd /opt/backup-client && scripts/atualizar.sh'; }
+docker exec "$C" bash -c 'echo 7.7.7 > /pacote-novo/VERSION; echo "# código novo" >> /pacote-novo/scripts/atualizar.sh'
+SAIDA5="$(atualizar_sh 2>&1)"
+TOTAL=$((TOTAL + 1)); if grep -q 'atualizado: backup-client .* -> 7.7.7' <<<"$SAIDA5" && grep -q '^falhas: ' <<<"$SAIDA5"; then echo "ok     atualizar.sh: baixa, atualiza e confere"; else echo "FALHA  atualizar.sh: $SAIDA5"; FALHAS=$((FALHAS + 1)); fi
+confere "atualizar.sh: trocou a si mesmo" 'grep -q "código novo" /opt/backup-client/scripts/atualizar.sh && [ "$(cat /opt/backup-client/VERSION)" = 7.7.7 ]'
+docker exec "$C" bash -c 'touch /tmp/curl-falha; echo 6.6.6 > /pacote-novo/VERSION'
+SAIDA6="$(atualizar_sh 2>&1)"; RC6=$?
+docker exec "$C" rm -f /tmp/curl-falha
+TOTAL=$((TOTAL + 1)); if [ "$RC6" -ne 0 ] && grep -q 'Atualização não concluída' <<<"$SAIDA6" && ! grep -q '^falhas: ' <<<"$SAIDA6"; then echo "ok     atualizar.sh: sem GitHub, acusa e não confere"; else echo "FALHA  atualizar.sh sem GitHub: rc=$RC6: $SAIDA6"; FALHAS=$((FALHAS + 1)); fi
+confere "atualizar.sh: sem GitHub, versão não muda" '[ "$(cat /opt/backup-client/VERSION)" = 7.7.7 ]'
+docker exec -d "$C" flock /opt/backup-client/tmp/backup.lock sleep 20
+sleep 1
+atualizar_sh >/dev/null 2>&1; RC7=$?
+TOTAL=$((TOTAL + 1)); if [ "$RC7" -eq 3 ]; then echo "ok     atualizar.sh: backup em andamento devolve o código 3"; else echo "FALHA  atualizar.sh com backup em andamento: rc=$RC7"; FALHAS=$((FALHAS + 1)); fi
+confere "atualizar.sh: backup em andamento, versão não muda" '[ "$(cat /opt/backup-client/VERSION)" = 7.7.7 ]'
 
 echo "testes: $TOTAL, falhas: $FALHAS"
 [ "$FALHAS" -eq 0 ]

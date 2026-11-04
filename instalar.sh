@@ -17,7 +17,8 @@
 #   9. --check-config e os "Dados para o registro" (mandar ao construtor).
 #
 # Servidor já instalado: atualização. Troca só o código; mantém .env, listas, logs, fila e o horário
-# do backup (acrescenta só o que versões novas exigem). Não pergunta nada.
+# do backup (acrescenta só o que versões novas exigem). Não pergunta nada. Quem já tem a 2.3.1 ou
+# mais nova pode usar /opt/backup-client/scripts/atualizar.sh, que roda isto e o --check-config.
 #
 # Opções: --atualizar (só atualiza: sem instalação, para com erro; usado pelo servidor de controle)
 #         --horario HH:MM (horário do backup na implantação)
@@ -419,7 +420,7 @@ passo_crontab() {
 }
 
 implantar() {
-  exec 3<"$ENTRADA" || parar "A implantação faz perguntas: rode num terminal."
+  { exec 3<"$ENTRADA"; } 2>/dev/null || parar "A implantação faz perguntas: rode num terminal."
   echo "Implantação do backup-client $(cat "$PACOTE/VERSION")"
   passo_dependencias
   passo_sysstat

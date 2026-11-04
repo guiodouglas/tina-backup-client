@@ -18,6 +18,9 @@ curl -fsSL https://raw.githubusercontent.com/guiodouglas/tina-backup-client/main
 - **Servidor já instalado:** troca só o código, sem perguntar nada. Mantém `.env`,
   `backup_sources.txt`, `backup_excludes.txt`, logs, fila e crontab.
 
+Em servidor com a versão 2.3.1 ou mais nova, atualizar é só rodar
+`/opt/backup-client/scripts/atualizar.sh`, que também confere com `--check-config` no fim.
+
 Antes de implantar: Docker instalado e 5 Shared Drives **vazios e só deste servidor**, com a conta
 do backup como membro. O backup é um espelho: um Drive que já tem conteúdo teria tudo apagado, e por
 isso o instalador o recusa.
