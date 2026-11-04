@@ -1,0 +1,151 @@
+#!/usr/bin/env bash
+# Testes do instalador num Ubuntu 24.04 descartável (precisa de Docker e de rede para o apt).
+# Uso: bash testes/teste_instalador.sh  → "falhas: 0". Apaga o container no fim.
+# Docker, systemctl, psql e o curl do FTP são simulados: Shared Drives = pastas em /drives; FTP = /ftp/lista.
+set -uo pipefail
+PACOTE="$(cd "$(dirname "$0")/.." && pwd)"
+C="bc-teste-instalador-$$"
+IMAGEM="${IMAGEM:-ubuntu:24.04}"
+FALHAS=0; TOTAL=0
+confere() {  # descrição, comando (roda no container)
+  TOTAL=$((TOTAL + 1))
+  if docker exec "$C" bash -c "$2" >/dev/null 2>&1; then echo "ok     $1"; else echo "FALHA  $1"; FALHAS=$((FALHAS + 1)); fi
+}
+trap 'docker rm -f "$C" >/dev/null 2>&1' EXIT
+
+docker run -d --name "$C" "$IMAGEM" sleep 1800 >/dev/null || exit 1
+docker exec "$C" bash -c 'apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq curl >/dev/null' || exit 1
+docker exec "$C" mkdir -p /pacote /pacote-novo /stubs /drives/D1 /drives/D2 /drives/D3 /drives/D4 /drives/D5 \
+  /drives/OCUPADO/home /drives/MARCADO /ftp
+tar -C "$PACOTE" -cf - --exclude=.git . | docker exec -i "$C" tar -C /pacote -xf -
+docker exec "$C" bash -c 'touch /drives/MARCADO/.backup-client-reservado-srv-outro
+  printf "srv-ocupado_2026-11-01.tar.gz\r\nsrv-ocupado_2026-11-02.tar.gz\r\n" > /ftp/lista
+  cp -R /pacote/. /pacote-novo/ && echo 9.9.9 > /pacote-novo/VERSION'
+
+docker exec -i "$C" bash -c 'cat > /stubs/docker; chmod +x /stubs/docker' <<'EOF'
+#!/bin/bash
+case "$1" in
+  info) exit 0 ;;
+  --version) echo "Docker simulado"; exit 0 ;;
+esac
+id="$RCLONE_CONFIG_GDRIVE_TEAM_DRIVE"
+[ -d "/drives/$id" ] || exit 3
+for a in "$@"; do
+  case "$a" in
+    lsf) ls -Ap "/drives/$id"; exit 0 ;;
+    touch) touch "/drives/$id/${!##gdrive:}"; exit 0 ;;
+  esac
+done
+exit 0
+EOF
+docker exec -i "$C" bash -c 'cat > /stubs/systemctl; chmod +x /stubs/systemctl' <<'EOF'
+#!/bin/bash
+[ "$1" = is-active ] && echo active
+exit 0
+EOF
+docker exec -i "$C" bash -c 'printf "#!/bin/bash\nexit 0\n" > /stubs/psql; chmod +x /stubs/psql'
+docker exec -i "$C" bash -c 'cat > /stubs/curl; chmod +x /stubs/curl' <<'EOF'
+#!/bin/bash
+case "$*" in
+  *api.ipify*) echo 203.0.113.9; exit 0 ;;
+  *ftp://errado*) exit 67 ;;
+  *--list-only*) cat /ftp/lista; exit 0 ;;
+esac
+exit 0
+EOF
+
+roda() {  # arquivo de respostas (no container), argumentos do instalador
+  local r="$1"; shift
+  docker exec "$C" env PATH="/stubs:/usr/sbin:/usr/bin:/sbin:/bin" ENTRADA_INSTALADOR="$r" bash /pacote/instalar.sh "$@"
+}
+
+# --- Sem instalação: --atualizar recusa, sem criar nada.
+confere "--atualizar sem instalação para com erro" '! ENTRADA_INSTALADOR=/dev/null bash /pacote/instalar.sh --atualizar'
+confere "--atualizar sem instalação não cria a pasta" '[ ! -e /opt/backup-client ]'
+
+# --- Implantação em duas partes: as respostas acabam no meio; a segunda rodada só pergunta o resto.
+SENHA_FTP="a'b c\$d&e"
+TOKEN='{"access_token":"tok-secreto-123","expiry":"2030-01-01T00:00:00Z"}'
+{
+  echo "errado.exemplo"; echo "usuario"; echo "senha\"recusada"; echo "qualquer"   # FTP inválido: pede de novo
+  echo "ftp.exemplo"; echo "usuario"; printf '%s\n' "$SENHA_FTP"
+  echo "nome com espaço"
+  echo "srv-ocupado"; echo ""                                                       # nome com backup no FTP: recusa
+  echo "srv-novo"
+} | docker exec -i "$C" tee /tmp/respostas1 >/dev/null
+{
+  echo "nao-e-json"; printf '%s\n' "$TOKEN"; echo ""
+  echo "inexistente"                                                                # inacessível
+  echo "OCUPADO"; echo ""                                                           # com conteúdo: recusa
+  echo "MARCADO"                                                                    # reservado para outro: recusa
+  echo "D1"
+  echo "D1"; echo "D2"                                                              # repetido: recusa
+  echo "D3"; echo "D4"; echo "D5"
+  echo "senha-banco-456"
+  echo "/srv/dados"; echo "sem-barra"; echo ""
+  echo "/srv/dados/cache/**"; echo ""
+  echo "25:00"; echo "21:30"
+} | docker exec -i "$C" tee /tmp/respostas2 >/dev/null
+
+SAIDA1="$(roda /tmp/respostas1 2>&1)"; RC1=$?
+TOTAL=$((TOTAL + 1)); if [ "$RC1" -ne 0 ] && grep -q 'o que já foi respondido fica guardado' <<<"$SAIDA1"; then echo "ok     respostas interrompidas: para com aviso"; else echo "FALHA  respostas interrompidas: rc=$RC1"; FALHAS=$((FALHAS + 1)); fi
+confere "interrompido: sem linha de backup no crontab" '! grep -q scripts/backup.sh /etc/crontab'
+confere "interrompido: .env com 600" '[ "$(stat -c %a /opt/backup-client/.env)" = 600 ]'
+
+SAIDA2="$(roda /tmp/respostas2 2>&1)"; RC2=$?
+echo "$SAIDA2" | tail -14
+confere "dependências instaladas" 'command -v jq && command -v psql && command -v sar && command -v sudo && command -v uuidgen'
+TOTAL=$((TOTAL + 1)); if grep -qE "tok-secreto|senha-banco-456|c\\\$d&e" <<<"$SAIDA1$SAIDA2"; then echo "FALHA  nenhuma senha na saída"; FALHAS=$((FALHAS + 1)); else echo "ok     nenhuma senha na saída"; fi
+TOTAL=$((TOTAL + 1)); if [ "$(grep -c 'FALHA' <<<"$SAIDA2")" -le 2 ] && grep -q 'FALHA  sysstat: sem amostras hoje' <<<"$SAIDA2"; then echo "ok     --check-config: só o sysstat falta (normal logo após ligar)"; else echo "FALHA  --check-config: falhas inesperadas"; grep FALHA <<<"$SAIDA2"; FALHAS=$((FALHAS + 1)); fi
+TOTAL=$((TOTAL + 1)); if grep -q '^nome: srv-novo' <<<"$SAIDA2" && grep -q '=== FIM ===' <<<"$SAIDA2"; then echo "ok     dados para o registro"; else echo "FALHA  dados para o registro"; FALHAS=$((FALHAS + 1)); fi
+
+confere ".env: 600" '[ "$(stat -c %a /opt/backup-client/.env)" = 600 ]'
+docker exec -i "$C" bash -c 'cat > /tmp/ler_env.sh' <<'EOF'
+set -a; . /opt/backup-client/.env; set +a
+[ "$SERVER_NAME" = srv-novo ] && [ "$FTP_BACKUP_HOST" = ftp.exemplo ] && [ "$FTP_BACKUP_PASSWORD" = "a'b c\$d&e" ] \
+  && [ "$TINA_DB_PASSWORD" = senha-banco-456 ] && [ "$RCLONE_CONFIG_GDRIVE_TYPE" = drive ] \
+  && [ "$(jq -r .access_token <<<"$RCLONE_CONFIG_GDRIVE_TOKEN")" = tok-secreto-123 ] \
+  && [ "$RCLONE_TEAM_DRIVE_SEGUNDA $RCLONE_TEAM_DRIVE_TERCA $RCLONE_TEAM_DRIVE_QUARTA $RCLONE_TEAM_DRIVE_QUINTA $RCLONE_TEAM_DRIVE_SEXTA" = "D1 D2 D3 D4 D5" ] \
+  && [ "$TINA_DB_HOST" = tina.ti9.com.br ] && [ "$FTP_BACKUP_RETENCAO" = 3 ]
+EOF
+confere ".env: valores certos, inclusive senha com aspas e símbolos" 'bash /tmp/ler_env.sh'
+confere ".env: cada chave uma vez" '[ -z "$(grep -oE "^[A-Z_]+=" /opt/backup-client/.env | sort | uniq -d)" ]'
+for d in D1 D2 D3 D4 D5; do confere "marcador em $d" "[ -f /drives/$d/.backup-client-reservado-srv-novo ]"; done
+confere "Drive com conteúdo intocado" '[ "$(ls -A /drives/OCUPADO)" = home ]'
+confere "Drive de outro servidor intocado" '[ "$(ls -A /drives/MARCADO)" = .backup-client-reservado-srv-outro ]'
+confere "crontab: backup no horário" 'grep -qE "^30 21 \* \* 1-5 root /opt/backup-client/scripts/backup.sh --agendado$" /etc/crontab'
+confere "crontab: monitor no formato do --check-config" 'grep -qE "^\*/5 \* \* \* \* root /opt/backup-client/scripts/monitor\.sh$" /etc/crontab'
+confere "listas: padrão + acrescentados" 'grep -qx /opt /opt/backup-client/backup_sources.txt && grep -qx /srv/dados /opt/backup-client/backup_sources.txt && ! grep -q sem-barra /opt/backup-client/backup_sources.txt && grep -qxF "/srv/dados/cache/**" /opt/backup-client/backup_excludes.txt'
+confere "código: só o necessário" '[ -x /opt/backup-client/scripts/backup.sh ] && [ -f /opt/backup-client/lib/comum.sh ] && [ ! -e /opt/backup-client/instalar.sh ] && [ ! -e /opt/backup-client/testes ] && [ ! -e /opt/backup-client/acesso ] && [ -z "$(ls -d /opt/backup-client/.novo.* 2>/dev/null)" ]'
+confere "acesso: tina com chave presa ao IP do controle" 'id -nG tina >/dev/null && grep -q "^from=\"177.170.20.101\",no-agent-forwarding,no-port-forwarding,no-X11-forwarding ssh-ed25519 " /opt/tina-agent/.ssh/authorized_keys && [ "$(stat -c %U /opt/tina-agent/.ssh/authorized_keys)" = tina ] && visudo -cf /etc/sudoers.d/tina'
+confere "acesso: root com construtor (preso) e Mac" '[ "$(grep -c ssh-ed25519 /root/.ssh/authorized_keys)" = 2 ] && grep -q "^from=\"177.170.20.101\"" /root/.ssh/authorized_keys'
+
+# --- Atualização pelo mesmo comando: sem perguntas, nada além do código muda.
+docker exec "$C" bash -c 'mkdir -p /opt/backup-client/logs/2026-11-01 && echo x > /opt/backup-client/logs/2026-11-01/backup.log && echo y > /opt/backup-client/fila/item.json
+  mkdir -p /opt/backup-client/kit && touch /opt/backup-client/scripts/preparar-servidor.sh
+  cd /opt/backup-client && sha256sum .env backup_sources.txt backup_excludes.txt logs/2026-11-01/backup.log fila/item.json /etc/crontab /root/.ssh/authorized_keys > /tmp/antes.sha'
+docker exec "$C" bash -c 'mkdir -p /tmp/p && cp -R /pacote-novo/. /tmp/p/'
+atualiza() { docker exec "$C" env PATH="/stubs:/usr/sbin:/usr/bin:/sbin:/bin" ENTRADA_INSTALADOR=/dev/null bash /pacote-novo/instalar.sh "$@"; }
+SAIDA3="$(atualiza 2>&1)"; RC3=$?
+TOTAL=$((TOTAL + 1)); if [ "$RC3" -eq 0 ] && grep -q 'atualizado: backup-client .* -> 9.9.9' <<<"$SAIDA3"; then echo "ok     mesmo comando atualiza, sem perguntas"; else echo "FALHA  atualização: rc=$RC3: $SAIDA3"; FALHAS=$((FALHAS + 1)); fi
+confere "atualização: versão nova" '[ "$(cat /opt/backup-client/VERSION)" = 9.9.9 ]'
+confere "atualização: .env, listas, logs, fila, crontab e chaves iguais" 'cd /opt/backup-client && sha256sum -c /tmp/antes.sha'
+confere "atualização: resíduos antigos removidos" '[ ! -e /opt/backup-client/kit ] && [ ! -e /opt/backup-client/scripts/preparar-servidor.sh ]'
+
+# Backup em andamento: recusa sem tocar em nada.
+docker exec -d "$C" flock /opt/backup-client/tmp/backup.lock sleep 20
+sleep 1
+docker exec "$C" bash -c 'echo 8.8.8 > /pacote-novo/VERSION'
+atualiza >/dev/null 2>&1; RC4=$?
+TOTAL=$((TOTAL + 1)); if [ "$RC4" -eq 3 ]; then echo "ok     backup em andamento: recusa (código 3)"; else echo "FALHA  backup em andamento: rc=$RC4"; FALHAS=$((FALHAS + 1)); fi
+confere "backup em andamento: versão não muda" '[ "$(cat /opt/backup-client/VERSION)" = 9.9.9 ]'
+
+# Instalação até a 2.2.0: sem retenção e sem monitor; a atualização acrescenta.
+docker exec "$C" bash -c 'pkill -f "sleep 20"; sleep 0.5; sed -i "/^FTP_BACKUP_RETENCAO=/d" /opt/backup-client/.env; sed -i "/scripts\/monitor.sh/d" /etc/crontab'
+atualiza --atualizar >/dev/null 2>&1
+confere "2.2.0: retenção acrescentada" 'grep -qx "FTP_BACKUP_RETENCAO=3" /opt/backup-client/.env'
+confere "2.2.0: monitor acrescentado" 'grep -q "^\*/5 .*monitor.sh$" /etc/crontab'
+confere "versão publicada: VERSION da fonte é X.Y.Z" 'grep -qE "^[0-9]+\.[0-9]+\.[0-9]+$" /pacote/VERSION'
+
+echo "testes: $TOTAL, falhas: $FALHAS"
+[ "$FALHAS" -eq 0 ]

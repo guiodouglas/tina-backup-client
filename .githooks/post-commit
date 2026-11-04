@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
-# A cada commit, o kit pronto para servidores novos é refeito (/opt/tina-agent/kit/backup-client).
-/opt/tina-agent/tina-admin/infra/scripts/gerar-kit-backup-client.sh \
-  || echo "post-commit: AVISO: o kit não foi refeito; rode infra/scripts/gerar-kit-backup-client.sh" >&2
+# A cada commit, envia ao GitHub (repositório oficial). VERSION nova vira a tag vX.Y.Z no mesmo envio:
+# o instalador lê VERSION do main e baixa a tag, então os dois precisam chegar juntos (--atomic).
+v="v$(cat VERSION)"
+git rev-parse -q --verify "refs/tags/$v" >/dev/null || git tag -a "$v" -m "backup-client ${v#v}"
+git push -q --atomic origin main "$v" \
+  || echo "post-commit: AVISO: não enviei ao GitHub; rode: git push --atomic origin main $v" >&2
 exit 0
