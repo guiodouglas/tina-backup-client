@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Mesma regra do projeto do construtor: toda mudança no backup-client chega à TINA na mesma
+# entrega ("TINA: docs <hash>" ou "TINA: não se aplica: <motivo>") e todo código de problema
+# novo está em docs/CODIGOS.md da TINA.
+ARQUIVOS="$(git diff --cached --name-only | sed 's#^#backup-client/#')" \
+  exec /opt/tina-agent/tina-admin/.githooks/commit-msg "$1"

@@ -1,0 +1,7 @@
+# Nunca vai segredo para o Git (regra do projeto TINA).
+.env
+*.env
+!.env.example
+logs/
+fila/
+tmp/

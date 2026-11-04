@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# A cada commit, o kit pronto para servidores novos é refeito (/opt/tina-agent/kit/backup-client).
+/opt/tina-agent/tina-admin/infra/scripts/gerar-kit-backup-client.sh \
+  || echo "post-commit: AVISO: o kit não foi refeito; rode infra/scripts/gerar-kit-backup-client.sh" >&2
+exit 0
