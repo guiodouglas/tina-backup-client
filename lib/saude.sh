@@ -81,7 +81,7 @@ coletar_containers() {
          portas: [(.NetworkSettings.Ports // {}) | to_entries[] | .key as $k
                   | if .value == null then $k else (.value[] | "\($k)->\(.HostPort)") end] | unique,
          politica_reinicio: .HostConfig.RestartPolicy.Name, reinicios: .RestartCount,
-         iniciado_em: .State.StartedAt})
+         iniciado_em: .State.StartedAt, criado_em: .Created})
     | sort_by(.nome)')"
   # shellcheck disable=SC2086
   conferir_inicio_automatico $ids
