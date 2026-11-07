@@ -340,7 +340,7 @@ assistente_listas() {
 /opt
 EOF
   [ -f "$DESTINO/backup_excludes.txt" ] || cat > "$DESTINO/backup_excludes.txt" <<'EOF'
-# Exclusões (uma por linha; ** vale qualquer subpasta). Logs que mudam durante o backup também
+# Exclusões (uma por linha; ** vale qualquer subpasta; pasta/** exclui o conteúdo e mantém a pasta vazia). Logs que mudam durante o backup também
 # entram aqui, senão a conferência do Drive acusa diferença.
 /opt/backup-client/logs
 /opt/backup-client/fila

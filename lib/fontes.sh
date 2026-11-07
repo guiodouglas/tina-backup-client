@@ -59,7 +59,9 @@ gerar_filtro_rclone() {
     rel="${x#/}"
     if e_padrao "$x"; then
       case "$rel" in
-        *\*.[[:alnum:]_]*|*\?.[[:alnum:]_]*|*/\*\*) printf -- '- /%s\n' "$rel" >> "$saida" ;;
+        # pasta/**: tira o conteúdo e mantém a pasta (vazia) no Drive, como o TAR já faz
+        */\*\*) printf -- '- /%s/*\n- /%s/*/**\n' "${rel%/\*\*}" "${rel%/\*\*}" >> "$saida" ;;
+        *\*.[[:alnum:]_]*|*\?.[[:alnum:]_]*) printf -- '- /%s\n' "$rel" >> "$saida" ;;
         *) printf -- '- /%s/**\n- /%s/\n' "$rel" "$rel" >> "$saida" ;;
       esac
     elif [ -d "$x" ]; then
