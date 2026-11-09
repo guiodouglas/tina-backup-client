@@ -44,6 +44,12 @@ docker exec -i "$C" bash -c 'cat > /stubs/systemctl; chmod +x /stubs/systemctl' 
 [ "$1" = is-active ] && echo active
 exit 0
 EOF
+# timedatectl simulado: set-timezone aponta /etc/localtime para a zona (a imagem não traz tzdata).
+docker exec -i "$C" bash -c 'cat > /stubs/timedatectl; chmod +x /stubs/timedatectl' <<'EOF'
+#!/bin/bash
+[ "$1" = set-timezone ] || exit 0
+mkdir -p "/usr/share/zoneinfo/$(dirname "$2")" && touch "/usr/share/zoneinfo/$2" && ln -sf "/usr/share/zoneinfo/$2" /etc/localtime
+EOF
 # psql simulado: guarda o documento enviado às funções ingest.* em /tmp/psql-ingest (uma linha por chamada).
 # /tmp/psql-resposta = resposta do pedir_registro (padrão ja_registrado); /tmp/psql-falha = banco fora.
 docker exec -i "$C" bash -c 'cat > /stubs/psql; chmod +x /stubs/psql' <<'EOF'
@@ -116,6 +122,7 @@ TOKEN='{"access_token":"tok-secreto-123","expiry":"2030-01-01T00:00:00Z"}'
   echo "senha-banco-456"
   echo "/srv/dados"; echo "sem-barra"; echo ""
   echo "/srv/dados/cache/**"; echo ""
+  echo ""                                                                     # fuso: padrão S
   echo "25:00"; echo "21:30"
 } | docker exec -i "$C" tee /tmp/respostas2 >/dev/null
 
@@ -147,6 +154,8 @@ confere ".env: cada chave uma vez" '[ -z "$(grep -oE "^[A-Z_]+=" /opt/backup-cli
 for d in D1 D2 D3 D4 D5; do confere "marcador em $d" "[ -f /drives/$d/.backup-client-reservado-srv-novo ]"; done
 confere "Drive com conteúdo intocado" '[ "$(ls -A /drives/OCUPADO)" = home ]'
 confere "Drive de outro servidor intocado" '[ "$(ls -A /drives/MARCADO)" = .backup-client-reservado-srv-outro ]'
+TOTAL=$((TOTAL + 1)); if grep -q 'fuso alterado de .* para America/Sao_Paulo' <<<"$SAIDA2"; then echo "ok     implantação: fuso mudado para America/Sao_Paulo"; else echo "FALHA  implantação: fuso não mudou"; FALHAS=$((FALHAS + 1)); fi
+confere "fuso: /etc/localtime em America/Sao_Paulo" '[ "$(readlink -f /etc/localtime)" = /usr/share/zoneinfo/America/Sao_Paulo ]'
 confere "crontab: backup no horário" 'grep -qE "^30 21 \* \* 1-5 root /opt/backup-client/scripts/backup.sh --agendado$" /etc/crontab'
 confere "crontab: monitor no formato do --check-config" 'grep -qE "^\*/5 \* \* \* \* root /opt/backup-client/scripts/monitor\.sh$" /etc/crontab'
 confere "listas: padrão + acrescentados" 'grep -qx /opt /opt/backup-client/backup_sources.txt && grep -qx /srv/dados /opt/backup-client/backup_sources.txt && ! grep -q sem-barra /opt/backup-client/backup_sources.txt && grep -qxF "/srv/dados/cache/**" /opt/backup-client/backup_excludes.txt'
@@ -175,6 +184,17 @@ docker exec "$C" rm -f /tmp/psql-falha
 TOTAL=$((TOTAL + 1)); if [ "$RC3B" -eq 0 ] && grep -q 'registro automático não concluído' <<<"$SAIDA3B"; then echo "ok     banco fora: atualiza e avisa que o registro não foi feito"; else echo "FALHA  banco fora na atualização: rc=$RC3B: $SAIDA3B"; FALHAS=$((FALHAS + 1)); fi
 confere "atualização: .env, listas, logs, fila, crontab e chaves iguais" 'cd /opt/backup-client && sha256sum -c /tmp/antes.sha'
 confere "atualização: resíduos antigos removidos" '[ ! -e /opt/backup-client/kit ] && [ ! -e /opt/backup-client/scripts/preparar-servidor.sh ]'
+
+# Fuso fora do padrão: a atualização só avisa (não muda o fuso) e o --check-config acusa.
+docker exec "$C" bash -c 'mkdir -p /usr/share/zoneinfo/Etc && touch /usr/share/zoneinfo/Etc/UTC && ln -sf /usr/share/zoneinfo/Etc/UTC /etc/localtime'
+SAIDA3C="$(atualiza 2>&1)"
+TOTAL=$((TOTAL + 1)); if grep -q 'AVISO  fuso do servidor: Etc/UTC' <<<"$SAIDA3C"; then echo "ok     atualização: avisa fuso fora do padrão"; else echo "FALHA  atualização: sem aviso de fuso"; FALHAS=$((FALHAS + 1)); fi
+confere "atualização: fuso não foi mudado" '[ "$(readlink -f /etc/localtime)" = /usr/share/zoneinfo/Etc/UTC ]'
+CHK="$(docker exec "$C" env PATH="/stubs:/usr/sbin:/usr/bin:/sbin:/bin" /opt/backup-client/scripts/backup.sh --check-config 2>&1)"
+TOTAL=$((TOTAL + 1)); if grep -q 'FALHA  fuso: Etc/UTC' <<<"$CHK"; then echo "ok     --check-config: acusa fuso fora do padrão"; else echo "FALHA  --check-config: não acusou o fuso"; FALHAS=$((FALHAS + 1)); fi
+docker exec "$C" ln -sf /usr/share/zoneinfo/America/Sao_Paulo /etc/localtime
+CHK="$(docker exec "$C" env PATH="/stubs:/usr/sbin:/usr/bin:/sbin:/bin" /opt/backup-client/scripts/backup.sh --check-config 2>&1)"
+TOTAL=$((TOTAL + 1)); if grep -q 'OK     fuso: America/Sao_Paulo' <<<"$CHK"; then echo "ok     --check-config: fuso certo"; else echo "FALHA  --check-config: fuso certo não apareceu"; FALHAS=$((FALHAS + 1)); fi
 
 # Backup em andamento: recusa sem tocar em nada.
 docker exec -d "$C" flock /opt/backup-client/tmp/backup.lock sleep 20

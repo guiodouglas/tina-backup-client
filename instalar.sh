@@ -132,6 +132,9 @@ atualizar() {
     feito "FTP_BACKUP_RETENCAO=$RETENCAO_PADRAO no .env"
   fi
   echo "atualizado: backup-client $antes -> $(cat "$DESTINO/VERSION") (.env, listas, logs, fila e horário do backup mantidos)"
+  if [ "$(fuso_do_servidor)" != "$FUSO_PADRAO" ]; then
+    echo "AVISO  fuso do servidor: $(fuso_do_servidor) (o padrão é $FUSO_PADRAO). O cron roda nele; para mudar: timedatectl set-timezone $FUSO_PADRAO e systemctl restart cron (muda o horário de tudo no servidor)."
+  fi
   passo_registro
 }
 
@@ -429,8 +432,35 @@ passo_acesso() {
     && falha "o SSH tem AllowUsers/AllowGroups: inclua tina e root, senão a TINA não entra"
 }
 
+# Fuso do servidor: o cron roda no relógio dele; o padrão é America/Sao_Paulo (mesma lógica de lib/comum.sh).
+FUSO_PADRAO=America/Sao_Paulo
+fuso_do_servidor() {
+  local z; z="$(readlink -f /etc/localtime 2>/dev/null)"
+  case "$z" in */zoneinfo/*) echo "${z#*/zoneinfo/}"; return ;; esac
+  cat /etc/timezone 2>/dev/null || echo desconhecido
+}
+
+passo_fuso() {  # só na implantação: pergunta; a atualização apenas avisa (mexer no fuso muda o horário de tudo)
+  titulo "8. Fuso horário"
+  local atual; atual="$(fuso_do_servidor)"
+  if [ "$atual" = "$FUSO_PADRAO" ]; then ok "fuso $atual"; return 0; fi
+  echo "O servidor está em $atual. O backup roda no relógio do servidor (o horário que você vai informar é neste fuso)."
+  perguntar "Mudar o fuso para $FUSO_PADRAO? (S/n)" S
+  case "${RESPOSTA,,}" in
+    n|nao|não) echo "AVISO  fuso mantido em $atual: o horário do backup vale neste fuso." ;;
+    *)
+      if timedatectl set-timezone "$FUSO_PADRAO" 2>/dev/null \
+         || { ln -sf "/usr/share/zoneinfo/$FUSO_PADRAO" /etc/localtime && echo "$FUSO_PADRAO" > /etc/timezone; }; then
+        systemctl restart cron 2>/dev/null || systemctl restart crond 2>/dev/null || true
+        feito "fuso alterado de $atual para $FUSO_PADRAO (cron reiniciado)"
+      else
+        falha "não foi possível mudar o fuso para $FUSO_PADRAO"
+      fi ;;
+  esac
+}
+
 passo_crontab() {
-  titulo "8. Crontab"
+  titulo "9. Crontab"
   garantir_monitor
   if tem_linha_backup; then ok "backup já agendado"; return 0; fi
   while ! [[ "$HORARIO" =~ ^([01]?[0-9]|2[0-3]):([0-5][0-9])$ ]]; do
@@ -460,10 +490,11 @@ implantar() {
     echo; echo "$problemas problema(s) acima: corrija e rode o comando de novo (o que já foi respondido fica guardado)."
     exit 1
   fi
+  passo_fuso
   passo_crontab
-  titulo "9. Registro na TINA"
+  titulo "10. Registro na TINA"
   passo_registro
-  titulo "10. Conferência"
+  titulo "11. Conferência"
   if "$DESTINO/scripts/backup.sh" --check-config; then
     echo; echo "Tudo certo. O servidor entra no backup na próxima noite e a primeira coleta é o marco zero."
   else

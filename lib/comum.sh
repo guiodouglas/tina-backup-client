@@ -22,6 +22,15 @@ carregar_env() {
   TINA_DB_SSLMODE="${TINA_DB_SSLMODE:-require}"
 }
 
+# Fuso do servidor (o cron roda nele). readlink/arquivo em vez de "timedatectl show", que não existe
+# nas versões antigas do systemd. Mesma lógica em instalar.sh (o instalador não carrega esta lib).
+FUSO_PADRAO=America/Sao_Paulo
+fuso_do_servidor() {
+  local z; z="$(readlink -f /etc/localtime 2>/dev/null)"
+  case "$z" in */zoneinfo/*) echo "${z#*/zoneinfo/}"; return ;; esac
+  cat /etc/timezone 2>/dev/null || echo desconhecido
+}
+
 # Duração legível (mesmo formato do banco): 45 s, 3 min 9 s, 2 h 5 min, 1 dia e 3 h.
 tempo() {
   local s=$1

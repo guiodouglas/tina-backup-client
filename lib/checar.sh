@@ -22,6 +22,10 @@ checar_configuracao() {
   fi
   ok "exclusões: ${#EXCLUSOES[@]}; impressão da configuração $(impressao_configuracao | cut -c1-12)"
 
+  local fuso; fuso="$(fuso_do_servidor)"
+  if [ "$fuso" = "$FUSO_PADRAO" ]; then ok "fuso: $fuso"
+  else falha "fuso: $fuso; o cron roda no relógio do servidor e o padrão é $FUSO_PADRAO (timedatectl set-timezone $FUSO_PADRAO e systemctl restart cron)"; fi
+
   local ag; ag="$(agendamento_crontab)"
   if [ -z "$ag" ]; then
     falha "crontab: nenhuma linha ativa com /opt/backup-client/scripts/backup.sh"
