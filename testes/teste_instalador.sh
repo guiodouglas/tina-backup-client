@@ -135,7 +135,7 @@ docker exec "$C" bash -c 'echo novo > /tmp/psql-resposta'
 SAIDA2="$(roda /tmp/respostas2 2>&1)"; RC2=$?
 docker exec "$C" rm -f /tmp/psql-resposta
 echo "$SAIDA2" | tail -14
-confere "dependências instaladas" 'command -v jq && command -v psql && command -v sar && command -v sudo && command -v uuidgen'
+confere "dependências instaladas (jq, sysstat, sudo, uuidgen; o psql é o simulado)" 'command -v jq && command -v sar && command -v sudo && command -v uuidgen'
 TOTAL=$((TOTAL + 1)); if grep -qE "tok-secreto|senha-banco-456|c\\\$d&e" <<<"$SAIDA1$SAIDA2"; then echo "FALHA  nenhuma senha na saída"; FALHAS=$((FALHAS + 1)); else echo "ok     nenhuma senha na saída"; fi
 TOTAL=$((TOTAL + 1)); if [ "$(grep -c 'FALHA' <<<"$SAIDA2")" -le 2 ] && grep -q 'FALHA  sysstat: sem amostras hoje' <<<"$SAIDA2"; then echo "ok     --check-config: só o sysstat falta (normal logo após ligar)"; else echo "FALHA  --check-config: falhas inesperadas"; grep FALHA <<<"$SAIDA2"; FALHAS=$((FALHAS + 1)); fi
 TOTAL=$((TOTAL + 1)); if grep -q '^nome: srv-novo' <<<"$SAIDA2" && grep -q '=== FIM ===' <<<"$SAIDA2"; then echo "ok     dados para o registro"; else echo "FALHA  dados para o registro"; FALHAS=$((FALHAS + 1)); fi
@@ -254,6 +254,36 @@ confere "desinstalar: usuário tina, sudoers e pasta removidos" '! id tina && [ 
 confere "desinstalar: chaves do construtor e do Mac removidas" '[ "$(grep -c ssh-ed25519 /root/.ssh/authorized_keys)" = 0 ]'
 confere "desinstalar: marcadores dos Drives removidos" '[ -z "$(find /drives/D1 /drives/D2 /drives/D3 /drives/D4 /drives/D5 -name ".backup-client-reservado-*")" ]'
 confere "desinstalar: Drive com conteúdo de outro intocado" '[ "$(ls -A /drives/OCUPADO)" = home ]'
+
+# --- Dependências com PostgreSQL já instalado (Ubuntu 18.04 com PGDG fora do ar): psql basta, update com erro não para.
+docker exec "$C" mkdir -p /dep/bin
+docker exec -i "$C" bash -c 'cat > /dep/bin/apt-get; chmod +x /dep/bin/apt-get' <<'EOF2'
+#!/bin/bash
+echo "$*" >> /dep/apt.log
+[ "$1" = update ] && exit 100
+exit 0
+EOF2
+docker exec -i "$C" bash -c 'cat > /dep/bin/dpkg; chmod +x /dep/bin/dpkg' <<'EOF2'
+#!/bin/bash
+[ "$2" = postgresql-client ] && exit 1
+exit 0
+EOF2
+docker exec -i "$C" bash -c 'cat > /dep/roda.sh' <<'EOF2'
+ok() { printf 'OK     %s\n' "$*"; }
+feito() { printf 'FEITO  %s\n' "$*"; }
+titulo() { printf '\n== %s ==\n' "$*"; }
+parar() { printf 'ERRO   %s\n' "$*" >&2; exit "${2:-1}"; }
+EOF2
+docker exec "$C" bash -c "sed -n '/^passo_dependencias() {/,/^}/p' /pacote/instalar.sh >> /dep/roda.sh; echo passo_dependencias >> /dep/roda.sh"
+docker exec "$C" bash -c 'rm -f /dep/apt.log; PATH=/dep/bin:$PATH:/stubs bash /dep/roda.sh' > /tmp/dep-saida 2>&1; RCD=$?
+docker exec "$C" bash -c 'PATH=/dep/bin:$PATH:/stubs bash /dep/roda.sh' >/dev/null 2>&1
+confere "dependências: psql instalado não pede postgresql-client, mesmo com update falhando" \
+  'cd /dep; PATH=/dep/bin:$PATH:/stubs bash roda.sh 2>&1 | grep -q "OK     psql" && ! grep -q "install.*postgresql-client" apt.log'
+confere "dependências: update com erro não impede a instalação do que falta" \
+  'cd /dep; rm -f apt.log; printf "#!/bin/bash\n[ \"\$2\" = jq ] && exit 1; exit 0\n" > bin/dpkg; PATH=/dep/bin:$PATH:/stubs bash roda.sh 2>&1 | grep -q "AVISO  apt-get update" && grep -q "install -y -qq jq" apt.log'
+confere "dependências: sem psql, pede postgresql-client" \
+  'cd /dep; rm -f apt.log; mkdir -p semps; for c in bash cat grep sed dirname id printf; do ln -sf "$(command -v $c)" semps/$c; done; PATH=/dep/bin:/dep/semps bash roda.sh >/dev/null 2>&1; grep -q "postgresql-client" apt.log'
+docker exec "$C" rm -rf /dep
 
 echo "testes: $TOTAL, falhas: $FALHAS"
 [ "$FALHAS" -eq 0 ]

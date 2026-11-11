@@ -6,7 +6,7 @@
 #
 # Servidor novo (sem instalação completa): implantação, com assistente. Pode rodar de novo
 # quantas vezes precisar: cada passo só age se faltar algo e o que já foi respondido não é perguntado.
-#   1. Dependências: sudo, sysstat, jq, curl, uuid-runtime, postgresql-client.
+#   1. Dependências: sudo, sysstat, jq, curl, uuid-runtime e o psql (qualquer versão já instalada).
 #   2. sysstat: liga a coleta de métricas.
 #   3. Docker: confere (obrigatório: o rclone roda em container; não é instalado por aqui).
 #   4. Código em /opt/backup-client.
@@ -361,12 +361,18 @@ passo_dependencias() {
   titulo "1. Dependências"
   local p faltam=()
   command -v apt-get >/dev/null || parar "Este instalador é para Ubuntu/Debian (apt-get não encontrado)."
-  for p in sudo sysstat jq curl uuid-runtime postgresql-client; do
+  for p in sudo sysstat jq curl uuid-runtime; do
     dpkg -s "$p" >/dev/null 2>&1 && ok "$p" || faltam+=("$p")
   done
+  # Cliente do banco: serve qualquer psql já instalado (ex.: só o postgresql-client-12, sem o metapacote).
+  # Não se instala outro por cima: o servidor pode ter o PostgreSQL dele em produção.
+  if command -v psql >/dev/null 2>&1; then ok "psql"; else faltam+=(postgresql-client); fi
   if [ ${#faltam[@]} -gt 0 ]; then
-    if DEBIAN_FRONTEND=noninteractive apt-get update -qq </dev/null >/dev/null \
-       && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "${faltam[@]}" </dev/null >/dev/null; then
+    # Repositório de terceiros fora do ar (ex.: PGDG no Ubuntu 18.04) faz o update falhar, mas os
+    # pacotes do Ubuntu continuam instaláveis: só para se a instalação em si falhar.
+    DEBIAN_FRONTEND=noninteractive apt-get update -qq </dev/null >/dev/null \
+      || printf 'AVISO  apt-get update terminou com erro (repositório fora do ar?); tentando instalar assim mesmo\n'
+    if DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "${faltam[@]}" </dev/null >/dev/null; then
       feito "instalados: ${faltam[*]}"
     else
       parar "Não foi possível instalar: ${faltam[*]} (apt-get)"
