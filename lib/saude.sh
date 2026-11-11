@@ -62,7 +62,7 @@ coletar_containers() {
     problema DOCKER_INDISPONIVEL ATENCAO saude "Docker indisponível: containers não coletados"
     return 0
   fi
-  ids="$(docker ps -aq)"
+  ids="$(ids_containers)"
   [ -n "$ids" ] || { CONTAINERS_JSON='[]'; return 0; }
   # shellcheck disable=SC2086
   imgs="$(docker inspect $ids | jq -r '.[].Image' | sort -u)"

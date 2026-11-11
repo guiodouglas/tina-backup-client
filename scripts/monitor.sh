@@ -33,8 +33,9 @@ memoria="$(awk '/^MemTotal:/ {t = $2} /^MemAvailable:/ {a = $2} END { if (t) pri
 # Containers: sem resposta do Docker, a lista não vai (o banco então não conclui nada sobre eles).
 containers=""
 if timeout 30 docker info >/dev/null 2>&1; then
-  ids="$(timeout 30 docker ps -aq 2>/dev/null)"
-  if [ -z "$ids" ]; then
+  if ! ids="$(ids_containers)"; then
+    :   # docker ps falhou: a lista não vai
+  elif [ -z "$ids" ]; then
     containers='[]'
   else
     # shellcheck disable=SC2086

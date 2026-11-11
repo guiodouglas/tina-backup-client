@@ -12,7 +12,7 @@ rclone_em_container() {
   export RCLONE_CONFIG_GDRIVE_TEAM_DRIVE="$1"; shift
   for v in $(compgen -e | grep '^RCLONE_'); do vars+=(-e "$v"); done
   [ -n "${TEMPO_LIMITE:-}" ] && limite=(timeout "$TEMPO_LIMITE")
-  "${limite[@]}" docker run --rm "${vars[@]}" -v /:/host:ro -v "$RAIZ/logs:/backup-logs" -v "$RAIZ/tmp:/backup-tmp" \
+  "${limite[@]}" docker run --rm --label "${ROTULO_BACKUP_CLIENT:-tina.backup-client}=rclone" "${vars[@]}" -v /:/host:ro -v "$RAIZ/logs:/backup-logs" -v "$RAIZ/tmp:/backup-tmp" \
     -w /host "$IMAGEM_RCLONE" "$@"
 }
 

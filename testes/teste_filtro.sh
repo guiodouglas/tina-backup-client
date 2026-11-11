@@ -30,7 +30,7 @@ if command -v docker >/dev/null 2>&1 && docker image inspect rclone/rclone:1.75.
   gerar_filtro_rclone "$T/f.txt"; sed -i '/^- \*\*$/d' "$T/f.txt"
   docker run --rm -v "$T:/t" rclone/rclone:1.75.0 copy /t/src /t/dst --filter-from /t/f.txt --create-empty-src-dirs >/dev/null 2>&1
   confere "rclone: pastas ficam vazias e o resto vai" \
-    "$(cd "$T/dst" && find . | sort | tr '\n' ' ')" ". pg pg/base pg/f pg/log pg/pg_wal pg/pg_wal/w "
+    "$(cd "$T/dst" && find . | sed 's|^\./||' | sort | tr '\n' ' ')" ". pg pg/base pg/f pg/log pg/pg_wal pg/pg_wal/w "
 fi
 
 echo "total: $TOTAL, falhas: $FALHAS"; [ "$FALHAS" -eq 0 ]

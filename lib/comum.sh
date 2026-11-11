@@ -113,3 +113,15 @@ url_ftp() {
   local dir="${FTP_BACKUP_REMOTE_DIR%/}"
   printf 'ftp://%s:%s%s/%s' "$FTP_BACKUP_HOST" "$FTP_BACKUP_PORT" "$dir" "$1"
 }
+
+# Containers do servidor, sem os do próprio backup-client (o rclone temporário de cada sync, marcado
+# com a label tina.backup-client): senão o monitor o toma por container do servidor e acusa
+# "não existe mais" quando o sync termina. Um id por linha; vazio se não houver nenhum.
+ROTULO_BACKUP_CLIENT="tina.backup-client"
+ids_containers() {
+  local todos meus
+  todos="$(timeout 30 docker ps -aq 2>/dev/null)" || return 1
+  meus="$(timeout 30 docker ps -aq --filter "label=$ROTULO_BACKUP_CLIENT" 2>/dev/null)" || return 1
+  [ -n "$meus" ] || { printf '%s' "$todos"; return 0; }
+  grep -vxF -f <(printf '%s\n' "$meus") <<<"$todos" || true
+}
